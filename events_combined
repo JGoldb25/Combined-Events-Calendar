@@ -1,0 +1,156 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from bs4 import BeautifulSoup
+import pandas as pd
+
+# Set up Selenium WebDriver
+def get_dynamic_html(url):
+    """
+    Fetch the complete HTML of a dynamically loaded webpage using Selenium.
+    
+    Args:
+        url (str): The URL of the webpage to fetch.
+    
+    Returns:
+        str: The full page HTML content after dynamic loading.
+    """
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    driver = webdriver.Chrome(options=chrome_options)
+
+    try:
+        driver.get(url)
+        driver.implicitly_wait(10)
+        html_content = driver.page_source
+    except Exception as e:
+        print(f"Error: {e}")
+        html_content = ""
+    finally:
+        driver.quit()
+
+    return html_content
+
+# Extract Friendship Circle NYC events
+def extract_friendship_circle_events():
+    url = "https://www.friendshipcirclenyc.org/events"
+    html_content = get_dynamic_html(url)
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    event_data = []
+    organizer = "Friendship Circle NYC"
+    base_url = "https://www.friendshipcirclenyc.org"
+
+    for container in soup.find_all("div", class_="views-row"):
+        # Event Title
+        event_title_element = container.find("h2", class_="field-content event-title")
+        event_url = None
+        if event_title_element:
+            event_link = event_title_element.find("a")
+            event_title = event_link.get_text(strip=True) if event_link else None
+            relative_url = event_link['href'] if event_link and 'href' in event_link.attrs else None
+            event_url = f"{base_url}{relative_url}" if relative_url else None
+
+        # Event Location
+        event_location_element = container.find("div", class_="views-field-nothing")
+        event_location = None
+        if event_location_element:
+            location_text = event_location_element.find("span").text.strip()
+            if location_text:
+                event_location = location_text
+
+        # Event Date and Time
+        event_datetime_element = container.find("div", class_="event-datetime")
+        event_date, start_time = None, None
+        if event_datetime_element:
+            event_datetime = event_datetime_element.text.strip()
+            parts = event_datetime.split(",")
+            if len(parts) >= 3:
+                event_date = parts[0].strip() + ", " + parts[1].strip()  # Combine first two parts
+                start_time = parts[2].split(" to ")[0].strip()  # Extract start time before "to"
+
+        # Add to event data
+        if event_title:  # Ensure we have a title before adding
+            event_data.append({
+                "Organizer": organizer,
+                "Source": event_url or "URL Not Provided",
+                "Event Title": event_title,
+                "Event Location": event_location or "Location Not Provided",
+                "Date": event_date or "Date Not Provided",
+                "Start Time": start_time or "Time Not Provided"
+            })
+
+    return pd.DataFrame(event_data)
+
+# Extract UJA events
+def extract_uja_events():
+    url = "https://www.ujafedny.org/get-involved/attend-an-event"
+    html_content = get_dynamic_html(url)
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    event_data = []
+    organizer = "UJA"
+    base_url = "https://www.ujafedny.org"
+
+    for container in soup.find_all("a", class_="wrapper ng-star-inserted"):
+        # Extract event title
+        event_title_element = container.find("div", class_="title")
+        event_title = event_title_element.get_text(strip=True) if event_title_element else None
+
+        # Extract event location
+        location_element = container.find("div", class_="tags")
+        event_location = None
+        if location_element:
+            location_text = location_element.find("div", class_="name first")
+            event_location = location_text.get_text(strip=True) if location_text else "Location Not Provided"
+
+        # Extract event date and time
+        date_element = container.find("div", class_="date")
+        event_date, start_time = None, None
+        if date_element:
+            full_date = date_element.get_text(strip=True)
+            parts = full_date.split(" ", 1)  # Split into weekday and the rest
+            if len(parts) > 1:
+                date_and_time = parts[1].rsplit(" ", 1)  # Split into date and time
+                if len(date_and_time) == 2:
+                    event_date, start_time = date_and_time[0], date_and_time[1]
+
+        # Source URL
+        event_url = f"{base_url}{container['href']}"
+
+        # Add to event data
+        if event_title:
+            event_data.append({
+                "Organizer": organizer,
+                "Source": event_url or "URL Not Provided",
+                "Event Title": event_title,
+                "Event Location": event_location or "Location Not Provided",
+                "Date": event_date or "Date Not Provided",
+                "Start Time": start_time or "Time Not Provided"
+            })
+
+    return pd.DataFrame(event_data)
+
+# Extract both sources' event data
+friendship_circle_df = extract_friendship_circle_events()
+uja_df = extract_uja_events()
+
+# Combine data into one DataFrame
+combined_df = pd.concat([friendship_circle_df, uja_df], ignore_index=True)
+
+# Format Date and Time
+combined_df['Date'] = combined_df['Date'].str.split(",", n=1).str[1].str.strip()
+combined_df['DateTime'] = pd.to_datetime(combined_df['Date'] + " " + combined_df['Start Time'], errors='coerce')
+combined_df = combined_df.sort_values(by='DateTime').drop(columns=['DateTime'])
+
+# Convert Source column to Excel-friendly hyperlinks
+combined_df['Source'] = combined_df['Source'].apply(lambda url: f'=HYPERLINK("{url}", "Event Page")' if url != "URL Not Provided" else "URL Not Provided")
+
+# Save to CSV with hyperlinks
+output_file = r"C:\Users\JoshuaGoldberg\OneDrive - happify.com\Desktop\Event Calendar\events_combined.csv"
+combined_df.to_csv(output_file, index=False)
+
+print(f"Data saved to {output_file}")
+print()
+print(combined_df.head())

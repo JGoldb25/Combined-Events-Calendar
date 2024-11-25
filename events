@@ -1,0 +1,110 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from bs4 import BeautifulSoup
+import pandas as pd
+
+# Set up Selenium WebDriver
+def get_dynamic_html(url):
+    """
+    Fetch the complete HTML of a dynamically loaded webpage using Selenium.
+    
+    Args:
+        url (str): The URL of the webpage to fetch.
+    
+    Returns:
+        str: The full page HTML content after dynamic loading.
+    """
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    driver = webdriver.Chrome(options=chrome_options)
+
+    try:
+        driver.get(url)
+        driver.implicitly_wait(10)
+        html_content = driver.page_source
+    except Exception as e:
+        print(f"Error: {e}")
+        html_content = ""
+    finally:
+        driver.quit()
+
+    return html_content
+
+# URL of the events page
+url = "https://www.friendshipcirclenyc.org/events"
+
+# Fetch the HTML
+html_content = get_dynamic_html(url)
+
+# Parse the HTML with BeautifulSoup
+soup = BeautifulSoup(html_content, "html.parser")
+
+# Extract event data
+event_data = []
+organizer = "Friendship Circle NYC"
+base_url = "https://www.friendshipcirclenyc.org"
+
+for container in soup.find_all("div", class_="views-row"):
+    # Extract event title and URL
+    event_title_element = container.find("h2", class_="field-content event-title")
+    event_url = None
+    if event_title_element:
+        event_link = event_title_element.find("a")
+        event_title = event_link.get_text(strip=True) if event_link else None
+        relative_url = event_link['href'] if event_link and 'href' in event_link.attrs else None
+        event_url = f"{base_url}{relative_url}" if relative_url else None
+
+    # Extract event location
+    event_location_element = container.find("div", class_="views-field-nothing")
+    event_location = None
+    if event_location_element:
+        location_text = event_location_element.find("span").text.strip()
+        if location_text:
+            event_location = location_text
+
+    # Extract event date and time
+    event_datetime_element = container.find("div", class_="event-datetime")
+    event_date, start_time = None, None
+    if event_datetime_element:
+        event_datetime = event_datetime_element.text.strip()
+        parts = event_datetime.split(",")
+        if len(parts) >= 3:
+            event_date = parts[0].strip() + ", " + parts[1].strip()  # Combine first two parts
+            start_time = parts[2].split(" to ")[0].strip()  # Extract start time before "to"
+
+    # Add to event data
+    if event_title:  # Ensure we have a title before adding
+        event_data.append({
+            "Organizer": organizer,
+            "Source": event_url or "URL Not Provided",
+            "Event Title": event_title,
+            "Event Location": event_location or "Location Not Provided",
+            "Date": event_date or "Date Not Provided",
+            "Start Time": start_time or "Time Not Provided"
+        })
+
+# Convert event_data to a DataFrame
+df = pd.DataFrame(event_data)
+
+# Remove the weekday part of the Date column
+df['Date'] = df['Date'].str.split(",", n=1).str[1].str.strip()
+
+# Convert Date and Start Time to datetime-compatible formats and sort
+df['DateTime'] = pd.to_datetime(df['Date'] + " " + df['Start Time'], errors='coerce')
+df = df.sort_values(by='DateTime').drop(columns=['DateTime'])
+
+# Convert Source column to Excel-friendly hyperlinks
+df['Source'] = df['Source'].apply(lambda url: f'=HYPERLINK("{url}", "Event Page")' if url != "URL Not Provided" else "URL Not Provided")
+
+# Save sorted data to a CSV file
+output_file = r"C:\Users\JoshuaGoldberg\OneDrive - happify.com\Desktop\Event Calendar\events.csv"
+df.to_csv(output_file, index=False)
+print(f"Data saved to {output_file}")
+
+# Add a blank line
+print()
+
+# Print the head of the sorted DataFrame
+print(df.head())

@@ -127,6 +127,15 @@ def extract_uja_events(url):
         relative_url = event.get("href", None)
         event_url = f"{base_url}{relative_url}" if relative_url else None
 
+        # Extract event location
+        event_location_element = event.find("div", class_="tags")
+        event_location = None
+        if event_location_element:
+            # Look for the first location inside the 'tags' div
+            location_tag = event_location_element.find("div", class_="name first")
+            if location_tag:
+                event_location = location_tag.text.strip()
+
         # Extract event date and time
         event_date_element = event.find("div", class_="date")
         event_date, event_time = None, None
@@ -168,12 +177,13 @@ def extract_uja_events(url):
                 "Date": event_date or "Date Not Provided",
                 "Start Time": event_time or "Time Not Provided",
                 "Event Title": event_title,
-                "Event Location": "Location Not Provided",  # Modify if location parsing is added
+                "Event Location": event_location or "Location Not Provided",
                 "Organizer": organizer,
                 "Source": event_url or "URL Not Provided"
             })
 
     return event_data
+
 
 # URLs of the event pages
 fc_url = "https://www.friendshipcirclenyc.org/events"

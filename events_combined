@@ -2,6 +2,9 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
 import pandas as pd
+from datetime import datetime, timedelta
+from dateutil.parser import parse  # Flexible date parsing
+
 
 # Set up Selenium WebDriver
 def get_dynamic_html(url):
@@ -33,17 +36,16 @@ def get_dynamic_html(url):
     return html_content
 
 # Extract Friendship Circle NYC events
-def extract_friendship_circle_events():
-    url = "https://www.friendshipcirclenyc.org/events"
+def extract_fc_events(url):
     html_content = get_dynamic_html(url)
     soup = BeautifulSoup(html_content, "html.parser")
-
+    
     event_data = []
     organizer = "Friendship Circle NYC"
     base_url = "https://www.friendshipcirclenyc.org"
 
     for container in soup.find_all("div", class_="views-row"):
-        # Event Title
+        # Extract event title and URL
         event_title_element = container.find("h2", class_="field-content event-title")
         event_url = None
         if event_title_element:
@@ -52,105 +54,156 @@ def extract_friendship_circle_events():
             relative_url = event_link['href'] if event_link and 'href' in event_link.attrs else None
             event_url = f"{base_url}{relative_url}" if relative_url else None
 
-        # Event Location
+        # Extract event location
         event_location_element = container.find("div", class_="views-field-nothing")
         event_location = None
         if event_location_element:
             location_text = event_location_element.find("span").text.strip()
             if location_text:
                 event_location = location_text
+                
+        # Get today's date and calculate the threshold for recent past events
+        today = datetime.today()
+        three_months_ago = today - timedelta(days=90)  # Roughly three months ago
 
-        # Event Date and Time
+        # Extract event date and time
         event_datetime_element = container.find("div", class_="event-datetime")
         event_date, start_time = None, None
         if event_datetime_element:
             event_datetime = event_datetime_element.text.strip()
             parts = event_datetime.split(",")
             if len(parts) >= 3:
-                event_date = parts[0].strip() + ", " + parts[1].strip()  # Combine first two parts
+                event_date = parts[1].strip()  # Extract date part (e.g., "November 30")
                 start_time = parts[2].split(" to ")[0].strip()  # Extract start time before "to"
 
-        # Add to event data
-        if event_title:  # Ensure we have a title before adding
+                # Append the current year initially
+                try:
+                    event_date_with_year = f"{event_date}, {today.year}"
+                    parsed_date_with_year = datetime.strptime(event_date_with_year, "%B %d, %Y")
+
+                    # Adjust the year for future/past events
+                    if parsed_date_with_year < today - timedelta(days=90):
+                        parsed_date_with_year = parsed_date_with_year.replace(year=today.year + 1)
+                    elif parsed_date_with_year > today + timedelta(days=90):
+                        parsed_date_with_year = parsed_date_with_year.replace(year=today.year - 1)
+
+                    # Format the final event date
+                    event_date = parsed_date_with_year.strftime("%m/%d/%Y")
+
+                    # Get the weekday name
+                    weekday_name = parsed_date_with_year.strftime("%A")
+                except ValueError as e:
+                    print(f"Error parsing date: {e}")
+                    event_date = "Invalid Date"
+                    weekday_name = "Invalid Date"
+
+        # Add event data to the list
+        if event_title:  # Ensure there is an event title
             event_data.append({
-                "Organizer": organizer,
-                "Source": event_url or "URL Not Provided",
+                "Weekday": weekday_name,  # Add weekday
+                "Date": event_date or "Date Not Provided",
+                "Start Time": start_time or "Time Not Provided",
                 "Event Title": event_title,
                 "Event Location": event_location or "Location Not Provided",
-                "Date": event_date or "Date Not Provided",
-                "Start Time": start_time or "Time Not Provided"
+                "Organizer": organizer,
+                "Source": event_url or "URL Not Provided"
             })
 
-    return pd.DataFrame(event_data)
+    return event_data
 
 # Extract UJA events
-def extract_uja_events():
-    url = "https://www.ujafedny.org/get-involved/attend-an-event"
+def extract_uja_events(url):
     html_content = get_dynamic_html(url)
     soup = BeautifulSoup(html_content, "html.parser")
-
+    
     event_data = []
-    organizer = "UJA"
+    organizer = "UJA-Federation of New York"
     base_url = "https://www.ujafedny.org"
 
-    for container in soup.find_all("a", class_="wrapper ng-star-inserted"):
-        # Extract event title
-        event_title_element = container.find("div", class_="title")
+    for event in soup.find_all("a", class_="wrapper"):
+        # Extract event title and URL
+        event_title_element = event.find("div", class_="title")
         event_title = event_title_element.get_text(strip=True) if event_title_element else None
-
-        # Extract event location
-        location_element = container.find("div", class_="tags")
-        event_location = None
-        if location_element:
-            location_text = location_element.find("div", class_="name first")
-            event_location = location_text.get_text(strip=True) if location_text else "Location Not Provided"
+        relative_url = event.get("href", None)
+        event_url = f"{base_url}{relative_url}" if relative_url else None
 
         # Extract event date and time
-        date_element = container.find("div", class_="date")
-        event_date, start_time = None, None
-        if date_element:
-            full_date = date_element.get_text(strip=True)
-            parts = full_date.split(" ", 1)  # Split into weekday and the rest
-            if len(parts) > 1:
-                date_and_time = parts[1].rsplit(" ", 1)  # Split into date and time
-                if len(date_and_time) == 2:
-                    event_date, start_time = date_and_time[0], date_and_time[1]
+        event_date_element = event.find("div", class_="date")
+        event_date, event_time = None, None
+        if event_date_element:
+            event_datetime = event_date_element.text.strip()
+            parts = event_datetime.split(" ", 1)
+            if len(parts) == 2:
+                event_date = parts[1].strip()
+                event_time = parts[0].strip()
 
-        # Source URL
-        event_url = f"{base_url}{container['href']}"
+        # Get today's date and calculate the threshold for recent past events
+        today = datetime.today()
 
-        # Add to event data
-        if event_title:
+        # Calculate weekday name
+        try:
+            event_date_with_year = f"{event_date}, {today.year}"
+            parsed_date_with_year = datetime.strptime(event_date_with_year, "%B %d, %Y")
+
+            # Adjust the year for future/past events
+            if parsed_date_with_year < today - timedelta(days=90):
+                parsed_date_with_year = parsed_date_with_year.replace(year=today.year + 1)
+            elif parsed_date_with_year > today + timedelta(days=90):
+                parsed_date_with_year = parsed_date_with_year.replace(year=today.year - 1)
+
+            # Format the final event date
+            event_date = parsed_date_with_year.strftime("%m/%d/%Y")
+
+            # Get the weekday name
+            weekday_name = parsed_date_with_year.strftime("%A")
+        except ValueError as e:
+            print(f"Error parsing date: {e}")
+            event_date = "Invalid Date"
+            weekday_name = "Invalid Date"
+
+        # Add event data to the list
+        if event_title:  # Ensure there is an event title
             event_data.append({
-                "Organizer": organizer,
-                "Source": event_url or "URL Not Provided",
-                "Event Title": event_title,
-                "Event Location": event_location or "Location Not Provided",
+                "Weekday": weekday_name,  # Add weekday
                 "Date": event_date or "Date Not Provided",
-                "Start Time": start_time or "Time Not Provided"
+                "Start Time": event_time or "Time Not Provided",
+                "Event Title": event_title,
+                "Event Location": "Location Not Provided",  # Modify if location parsing is added
+                "Organizer": organizer,
+                "Source": event_url or "URL Not Provided"
             })
 
-    return pd.DataFrame(event_data)
+    return event_data
 
-# Extract both sources' event data
-friendship_circle_df = extract_friendship_circle_events()
-uja_df = extract_uja_events()
+# URLs of the event pages
+fc_url = "https://www.friendshipcirclenyc.org/events"
+uja_url = "https://www.ujafedny.org/get-involved/attend-an-event"
 
-# Combine data into one DataFrame
-combined_df = pd.concat([friendship_circle_df, uja_df], ignore_index=True)
+# Extract events from both sources
+fc_events = extract_fc_events(fc_url)
+uja_events = extract_uja_events(uja_url)
 
-# Format Date and Time
-combined_df['Date'] = combined_df['Date'].str.split(",", n=1).str[1].str.strip()
-combined_df['DateTime'] = pd.to_datetime(combined_df['Date'] + " " + combined_df['Start Time'], errors='coerce')
-combined_df = combined_df.sort_values(by='DateTime').drop(columns=['DateTime'])
+# Combine data into a single DataFrame
+all_events = fc_events + uja_events
+df = pd.DataFrame(all_events)
+
+# Format and sort DataFrame
+df['DateTime'] = pd.to_datetime(df['Date'] + " " + df['Start Time'], errors='coerce')
+df = df.sort_values(by='DateTime').drop(columns=['DateTime'])
 
 # Convert Source column to Excel-friendly hyperlinks
-combined_df['Source'] = combined_df['Source'].apply(lambda url: f'=HYPERLINK("{url}", "Event Page")' if url != "URL Not Provided" else "URL Not Provided")
+df['Source'] = df['Source'].apply(lambda url: f'=HYPERLINK("{url}", "Event Page")' if url != "URL Not Provided" else "URL Not Provided")
 
-# Save to CSV with hyperlinks
-output_file = r"C:\Users\JoshuaGoldberg\OneDrive - happify.com\Desktop\Event Calendar\events_combined.csv"
-combined_df.to_csv(output_file, index=False)
+# Reorder columns so that 'Event Title' is at the end
+df = df[['Weekday', 'Date', 'Start Time', 'Event Location', 'Organizer', 'Source', 'Event Title']]
 
+# Save sorted data to a CSV file
+output_file = r"C:\Users\JoshuaGoldberg\OneDrive - happify.com\Desktop\Event Calendar\events.csv"
+df.to_csv(output_file, index=False)
 print(f"Data saved to {output_file}")
+
+# Add a blank line
 print()
-print(combined_df.head())
+
+# Print the head of the sorted DataFrame
+print(df.head())
